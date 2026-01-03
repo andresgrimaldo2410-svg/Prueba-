@@ -1,30 +1,87 @@
 const express = require('express');
+const axios = require('axios');
 const app = express();
 
 app.use(express.json());
 
 const port = process.env.PORT || 3000;
-const verifyToken = 'prueba123';
 
+// ⚠️ DATOS DE WHATSAPP (LUEGO LOS PONEMOS EN ENTORNO)
+const VERIFY_TOKEN = 'prueba123';
+const WHATSAPP_TOKEN = 'AQUI_VA_TU_TOKEN_DE_WHATSAPP';
+const PHONE_NUMBER_ID = 'AQUI_VA_TU_PHONE_NUMBER_ID';
+
+/* =========================
+   VERIFICACIÓN DEL WEBHOOK
+========================= */
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  console.log('MODE:', mode);
-  console.log('TOKEN:', token);
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
 
-  if (mode === 'subscribe' && token === verifyToken) {
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
+/* =========================
+   RECEPCIÓN DE MENSAJES
+========================= */
+app.post('/webhook', async (req, res) => {
+  try {
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+    if (!message) {
+      return res.sendStatus(200);
+    }
+
+    const from = message.from; // número del cliente
+    const text = message.text?.body?.toLowerCase();
+
+    console.log('Mensaje recibido:', text);
+
+    // RESPUESTA AUTOMÁTICA
+    let reply = 'Hola 👋 ¿En qué puedo ayudarte?\n\n1️⃣ Ventas\n2️⃣ Horarios\n3️⃣ Ubicación';
+
+    if (text === '1' || text?.includes('venta')) {
+      reply = '🍎 Tenemos frutas y verduras frescas todos los días.\n¿Qué buscas hoy?';
+    }
+
+    if (text === '2' || text?.includes('horario')) {
+      reply = '🕘 Abrimos de lunes a domingo de 8:00 am a 7:00 pm';
+    }
+
+    if (text === '3' || text?.includes('ubicacion')) {
+      reply = '📍 Estamos en tu mercado local. ¿Quieres la ubicación por Google Maps?';
+    }
+
+    // ENVIAR RESPUESTA
+    await axios.post(
+      `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: from,
+        text: { body: reply }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('Error:', error.response?.data || error.message);
+    res.sendStatus(200);
   }
 });
 
-app.post('/webhook', (req, res) => {
-  res.sendStatus(200);
-});
-
 app.listen(port, () => {
-  console.log(`Servidor en puerto ${port}`);
+  console.log(`Servidor activo en puerto ${port}`);
 });
