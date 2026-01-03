@@ -7,13 +7,13 @@ app.use(express.json());
 
 const port = process.env.PORT || 3000;
 
-// ⚠️ VARIABLES DE ENTORNO (configura estos secrets en GitHub)
+// ⚠️ Variables de entorno
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
 /* =========================
-   VERIFICACIÓN DEL WEBHOOK
+   Verificación del webhook
 ========================= */
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -28,7 +28,7 @@ app.get('/webhook', (req, res) => {
 });
 
 /* =========================
-   RECEPCIÓN DE MENSAJES
+   Recepción de mensajes
 ========================= */
 app.post('/webhook', async (req, res) => {
   try {
@@ -45,7 +45,7 @@ app.post('/webhook', async (req, res) => {
     }
 
     const message = messages[0];
-    const from = message.from; // número del cliente
+    const from = message.from;
     let text = message.text?.body;
 
     if (text) text = text.toLowerCase();
@@ -62,10 +62,10 @@ app.post('/webhook', async (req, res) => {
     } else if (text === '3' || (text && text.includes('ubicacion'))) {
       reply = '📍 Estamos en tu mercado local. ¿Quieres la ubicación por Google Maps?';
     } else if (!text) {
-      reply = 'Gracias por tu mensaje. Actualmente solo puedo responder mensajes de texto.';
+      reply = 'Recibimos tu archivo 📎 pero actualmente solo puedo responder mensajes de texto.';
     }
 
-    // ENVIAR RESPUESTA
+    // Enviar respuesta
     const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
     const payload = {
       messaging_product: 'whatsapp',
