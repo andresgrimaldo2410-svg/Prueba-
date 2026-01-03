@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const app = express();
@@ -6,10 +7,10 @@ app.use(express.json());
 
 const port = process.env.PORT || 3000;
 
-// ⚠️ DATOS DE WHATSAPP (LUEGO LOS PONEMOS EN ENTORNO)
-const VERIFY_TOKEN = 'prueba123';
-const WHATSAPP_TOKEN = 'EAAKckbKJ0t8BQY2ORfO08Vm5RykOnuDzLFBPZBrI0SLUlJOFODXEkWr6UrwdJ3kLZBNZAztvZCeBcmdMbdTuOLlVNQnyPZAKlcWZCYH3eG8bFF35oAB5znZC7WmucVYAuRbDThsSgg4jZCpKwO1hLPM4oeIwyCIjpj46eWw7Bcfe6DETh0PeTLDg40TUINSDYgZDZD';
-const PHONE_NUMBER_ID = '1373777010808264';
+// ⚠️ VARIABLES DE ENTORNO (configura estos secrets en GitHub)
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
 /* =========================
    VERIFICACIÓN DEL WEBHOOK
@@ -20,6 +21,7 @@ app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('WEBHOOK_VERIFIED');
     return res.status(200).send(challenge);
   }
   return res.sendStatus(403);
@@ -30,55 +32,57 @@ app.get('/webhook', (req, res) => {
 ========================= */
 app.post('/webhook', async (req, res) => {
   try {
+    console.log('Webhook recibido:');
+    console.log(JSON.stringify(req.body, null, 2));
+
     const entry = req.body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
-    const message = value?.messages?.[0];
+    const messages = value?.messages;
 
-    if (!message) {
+    if (!messages || messages.length === 0) {
       return res.sendStatus(200);
     }
 
+    const message = messages[0];
     const from = message.from; // número del cliente
-    const text = message.text?.body?.toLowerCase();
+    let text = message.text?.body;
 
-    console.log('Mensaje recibido:', text);
+    if (text) text = text.toLowerCase();
+
+    console.log('Mensaje de:', from, 'Texto:', text);
 
     // RESPUESTA AUTOMÁTICA
     let reply = 'Hola 👋 ¿En qué puedo ayudarte?\n\n1️⃣ Ventas\n2️⃣ Horarios\n3️⃣ Ubicación';
 
-    if (text === '1' || text?.includes('venta')) {
+    if (text === '1' || (text && text.includes('venta'))) {
       reply = '🍎 Tenemos frutas y verduras frescas todos los días.\n¿Qué buscas hoy?';
-    }
-
-    if (text === '2' || text?.includes('horario')) {
+    } else if (text === '2' || (text && text.includes('horario'))) {
       reply = '🕘 Abrimos de lunes a domingo de 8:00 am a 7:00 pm';
-    }
-
-    if (text === '3' || text?.includes('ubicacion')) {
+    } else if (text === '3' || (text && text.includes('ubicacion'))) {
       reply = '📍 Estamos en tu mercado local. ¿Quieres la ubicación por Google Maps?';
+    } else if (!text) {
+      reply = 'Gracias por tu mensaje. Actualmente solo puedo responder mensajes de texto.';
     }
 
     // ENVIAR RESPUESTA
-    await axios.post(
-      `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: 'whatsapp',
-        to: from,
-        text: { body: reply }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: from,
+      text: { body: reply }
+    };
+    const headers = {
+      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+      'Content-Type': 'application/json'
+    };
+
+    await axios.post(url, payload, { headers });
 
     res.sendStatus(200);
   } catch (error) {
-    console.error('Error:', error.response?.data || error.message);
-    res.sendStatus(200);
+    console.error('Error al procesar webhook:', error.response?.data || error.message);
+    res.sendStatus(500);
   }
 });
 
