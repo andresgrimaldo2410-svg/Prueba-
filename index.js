@@ -1,91 +1,167 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const app = express();
+const fs = require('fs');
 
+const app = express();
 app.use(express.json());
 
-const port = process.env.PORT || 3000;
-
-// ⚠️ Variables de entorno
+const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_ID = process.env.PHONE_NUMBER_ID;
 
-/* =========================
-   Verificación del webhook
-========================= */
+// MEMORIA SIMPLE
+const memory = {};
+
+// CONTACTOS CLAVE
+const ARMADOR = "5520606276";
+const ACTUALIZADOR = "5645594185";
+
+// CARGAR CATÁLOGO
+function cargarCatalogo() {
+  return JSON.parse(fs.readFileSync('./catalogo.json'));
+}
+
+// MENSAJES WHATSAPP
+async function sendMessage(to, body) {
+  await axios.post(
+    `https://graph.facebook.com/v22.0/${PHONE_ID}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to,
+      text: { body }
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+}
+
+// BOTONES
+async function sendButtons(to, text, buttons) {
+  await axios.post(
+    `https://graph.facebook.com/v22.0/${PHONE_ID}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text },
+        action: {
+          buttons: buttons.map(b => ({
+            type: "reply",
+            reply: { id: b.id, title: b.title }
+          }))
+        }
+      }
+    },
+    { headers: { Authorization: `Bearer ${TOKEN}` } }
+  );
+}
+
+// LISTA DE PRECIOS
+function generarCatalogoTexto() {
+  const cat = cargarCatalogo();
+  let txt = "📋 LISTA DE PRECIOS DEL DÍA\n\n";
+
+  for (const catg in cat) {
+    txt += `*${catg.toUpperCase()}*\n`;
+    cat[catg].forEach(p => {
+      if (p.disponible) {
+        txt += `• ${p.nombre} — $${p.precio}/${p.unidad}\n`;
+      }
+    });
+    txt += "\n";
+  }
+
+  txt += "⚠️ Inventario sujeto a disponibilidad\n";
+  txt += "⏰ Horario: 8:00 AM a 6:30 PM";
+  return txt;
+}
+
+// WEBHOOK VERIFICACIÓN
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log('WEBHOOK_VERIFIED');
     return res.status(200).send(challenge);
   }
-  return res.sendStatus(403);
+  res.sendStatus(403);
 });
 
-/* =========================
-   Recepción de mensajes
-========================= */
+// WEBHOOK MENSAJES
 app.post('/webhook', async (req, res) => {
-  try {
-    console.log('Webhook recibido:');
-    console.log(JSON.stringify(req.body, null, 2));
+  const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  if (!msg) return res.sendStatus(200);
 
-    const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const messages = value?.messages;
+  const from = msg.from;
+  const text = msg.text?.body?.toLowerCase();
 
-    if (!messages || messages.length === 0) {
-      return res.sendStatus(200);
+  // BOTONES
+  if (msg.type === "interactive") {
+    const id = msg.interactive.button_reply.id;
+
+    if (id === "ver_catalogo") {
+      await sendMessage(from, generarCatalogoTexto());
+      await sendButtons(from, "¿Qué deseas hacer ahora? 😄", [
+        { id: "ordenar", title: "🛒 Ordenar ahora" }
+      ]);
     }
 
-    const message = messages[0];
-    const from = message.from;
-    let text = message.text?.body;
-
-    if (text) text = text.toLowerCase();
-
-    console.log('Mensaje de:', from, 'Texto:', text);
-
-    // RESPUESTA AUTOMÁTICA
-    let reply = 'Hola 👋 ¿En qué puedo ayudarte?\n\n1️⃣ Ventas\n2️⃣ Horarios\n3️⃣ Ubicación';
-
-    if (text === '1' || (text && text.includes('venta'))) {
-      reply = '🍎 Tenemos frutas y verduras frescas todos los días.\n¿Qué buscas hoy?';
-    } else if (text === '2' || (text && text.includes('horario'))) {
-      reply = '🕘 Abrimos de lunes a domingo de 8:00 am a 7:00 pm';
-    } else if (text === '3' || (text && text.includes('ubicacion'))) {
-      reply = '📍 Estamos en tu mercado local. ¿Quieres la ubicación por Google Maps?';
-    } else if (!text) {
-      reply = 'Recibimos tu archivo 📎 pero actualmente solo puedo responder mensajes de texto.';
+    if (id === "ordenar") {
+      memory[from] = { pedido: [] };
+      await sendMessage(
+        from,
+        "🛒😋 Escribe tu pedido así:\nEj: tomate 2kg, cebolla 1kg"
+      );
     }
 
-    // Enviar respuesta
-    const url = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`;
-    const payload = {
-      messaging_product: 'whatsapp',
-      to: from,
-      text: { body: reply }
-    };
-    const headers = {
-      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-      'Content-Type': 'application/json'
-    };
-
-    await axios.post(url, payload, { headers });
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('Error al procesar webhook:', error.response?.data || error.message);
-    res.sendStatus(500);
+    return res.sendStatus(200);
   }
+
+  // BIENVENIDA
+  if (!memory[from]) {
+    await sendMessage(
+      from,
+      "👋😄 ¡Holaaaa!\nAquí vendemos frutas bien frescas 🍓🥑"
+    );
+    await sendButtons(from, "¿Qué te gustaría hacer?", [
+      { id: "ver_catalogo", title: "📋 Ver catálogo" },
+      { id: "ordenar", title: "🛒 Ordenar ahora" }
+    ]);
+    return res.sendStatus(200);
+  }
+
+  // GUARDAR PEDIDO
+  memory[from].pedido.push(text);
+
+  await sendButtons(from, "¿Confirmamos tu pedido? ✅", [
+    { id: "confirmar", title: "✅ Confirmar pedido" }
+  ]);
+
+  // CONFIRMAR
+  if (text?.includes("confirmar")) {
+    await sendMessage(from, "💰 Forma de pago:\n• Efectivo\n• Transferencia");
+
+    await sendMessage(
+      ARMADOR,
+      `🧺 NUEVO PEDIDO\nCliente: ${from}\nPedido:\n${memory[from].pedido.join("\n")}`
+    );
+
+    delete memory[from];
+  }
+
+  res.sendStatus(200);
 });
 
-app.listen(port, () => {
-  console.log(`Servidor activo en puerto ${port}`);
+// SERVER
+app.listen(PORT, () => {
+  console.log("🤖 Bot WhatsApp activo en puerto", PORT);
 });
