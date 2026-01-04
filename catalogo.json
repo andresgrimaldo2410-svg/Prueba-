@@ -1,0 +1,13 @@
+{
+  "frutas": [
+    { "nombre": "Tomate", "precio": 22, "unidad": "kg", "disponible": true },
+    { "nombre": "Cebolla", "precio": 20, "unidad": "kg", "disponible": true },
+    { "nombre": "Papa blanca", "precio": 22, "unidad": "kg", "disponible": true },
+    { "nombre": "Aguacate", "precio": 37, "unidad": "pieza", "disponible": true },
+    { "nombre": "Fresa domo", "precio": 69, "unidad": "pieza", "disponible": true }
+  ],
+  "verduras": [
+    { "nombre": "Calabaza", "precio": 27, "unidad": "kg", "disponible": true },
+    { "nombre": "Limón", "precio": 19, "unidad": "kg", "disponible": true }
+  ]
+}
