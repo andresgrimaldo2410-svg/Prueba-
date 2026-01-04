@@ -11,50 +11,89 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
-// ===============================
-// Memoria simple por cliente
-// ===============================
-const memoryFile = './memory.json';
-let memory = fs.existsSync(memoryFile)
-  ? JSON.parse(fs.readFileSync(memoryFile))
-  : {};
+const ARMADOR = "5520606276";
 
-const saveMemory = () =>
-  fs.writeFileSync(memoryFile, JSON.stringify(memory, null, 2));
+// --------------------
+// Memoria de clientes
+// --------------------
+const memoryFile = './data/memory.json';
+let memory = fs.existsSync(memoryFile) ? JSON.parse(fs.readFileSync(memoryFile)) : {};
+const saveMemory = () => fs.writeFileSync(memoryFile, JSON.stringify(memory, null, 2));
 
-// ===============================
-// Webhook verificación
-// ===============================
+// --------------------
+// Funciones de WhatsApp
+// --------------------
+async function sendMessage(to, text) {
+  await axios.post(
+    `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`,
+    { messaging_product: 'whatsapp', to, text: { body: text } },
+    { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+  );
+}
+
+// --------------------
+// Catálogo
+// --------------------
+function catalogoTexto() {
+  const cat = JSON.parse(fs.readFileSync('./data/catalogo.json'));
+  let t = "📋 *CATÁLOGO DE PRODUCTOS*\n\n";
+  for (const c in cat) {
+    t += `*${c.toUpperCase()}*\n`;
+    cat[c].forEach(p => {
+      if (p.disponible) t += `• ${p.nombre} — $${p.precio}/${p.unidad}\n`;
+    });
+    t += "\n";
+  }
+  return t;
+}
+
+// --------------------
+// Cotización simple
+// --------------------
+function cotizar(texto) {
+  const cat = JSON.parse(fs.readFileSync('./data/catalogo.json'));
+  let detalle = [];
+  let total = 0;
+  for (const c in cat) {
+    cat[c].forEach(p => {
+      if (!p.disponible) return;
+      const key = p.nombre.toLowerCase().split(" ")[0];
+      if (texto.includes(key)) {
+        const m = texto.match(/(\d+(\.\d+)?)/);
+        const q = m ? parseFloat(m[1]) : 1;
+        const sub = q * p.precio;
+        total += sub;
+        detalle.push(`• ${p.nombre} ${q} ${p.unidad} → $${sub}`);
+      }
+    });
+  }
+  if (!detalle.length) return null;
+  return { detalle, total };
+}
+
+// --------------------
+// Webhook verify
+// --------------------
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
-  }
-  return res.sendStatus(403);
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) return res.status(200).send(challenge);
+  res.sendStatus(403);
 });
 
-// ===============================
+// --------------------
 // Webhook mensajes
-// ===============================
+// --------------------
 app.post('/webhook', async (req, res) => {
   try {
-    const entry = req.body.entry?.[0];
-    const change = entry?.changes?.[0];
-    const value = change?.value;
-    const message = value?.messages?.[0];
+    const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    if (!msg) return res.sendStatus(200);
 
-    if (!message) return res.sendStatus(200);
+    const from = msg.from;
+    const text = msg.text?.body?.toLowerCase() || '';
 
-    const from = message.from;
-    const text = message.text?.body?.toLowerCase() || '';
-
-    if (!memory[from]) {
-      memory[from] = { historial: [], estado: 'inicio' };
-    }
-
+    if (!memory[from]) memory[from] = { historial: [], estado: 'inicio' };
     memory[from].historial.push(text);
     saveMemory();
 
@@ -65,46 +104,26 @@ app.post('/webhook', async (req, res) => {
 🧾 Hacer pedido  
 💳 Formas de pago`;
 
-    if (text.includes('catálogo')) {
-      reply = `📦 *CATÁLOGO GENERAL*  
-Tenemos frutas, verduras, chiles, extras y más 🥭🥕🌶️  
-Escribe el producto y la cantidad que deseas 😉`;
-    }
-
-    if (text.includes('pago')) {
-      reply = `💳 *FORMAS DE PAGO*  
+    if (text.includes('catálogo')) reply = catalogoTexto();
+    if (text.includes('pedido')) reply = `🧾 Perfecto 🙌  
+Escríbeme tu pedido (ej: 2 kg de jitomate, 1 sandía)`;
+    if (text.includes('pago')) reply = `💳 Formas de pago:  
 ✔️ Efectivo  
 ✔️ Transferencia  
-(No es obligatorio pagar antes)`;
+(No obligatorio pagar antes)`;
+    if (text.includes('ubicación')) reply = `📍 Cuando gustes, envíanos tu *ubicación de Google Maps* para la entrega 🚚`;
+
+    const cot = cotizar(text);
+    if (cot) {
+      reply = `🧾 Cotización automática:\n\n${cot.detalle.join("\n")}\n\n💰 Total: $${cot.total}\n\nEscribe *confirmar* para confirmar tu pedido`;
     }
 
-    if (text.includes('pedido')) {
-      reply = `🧾 Perfecto 🙌  
-Escríbeme tu pedido así:  
-👉 *2 kg de jitomate, 1 sandía*  
-Cuando confirmes, avisamos al armador 🧑‍🍳`;
+    if (text.includes('confirmar')) {
+      await sendMessage(from, "✅ Pedido confirmado 🎉");
+      await sendMessage(ARMADOR, `🧺 NUEVO PEDIDO\nCliente: ${from}\n${JSON.stringify(memory[from].historial, null, 2)}`);
     }
 
-    if (text.includes('ubicación')) {
-      reply = `📍 Cuando gustes, envíanos tu *ubicación de Google Maps*  
-(esto solo es para la entrega 🚚)`;
-    }
-
-    await axios.post(
-      `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: 'whatsapp',
-        to: from,
-        text: { body: reply }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
+    await sendMessage(from, reply);
     res.sendStatus(200);
   } catch (err) {
     console.error(err.message);
@@ -112,6 +131,5 @@ Cuando confirmes, avisamos al armador 🧑‍🍳`;
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Bot activo en puerto ${PORT}`);
-});
+// --------------------
+app.listen(PORT, () => console.log(`✅ Bot activo en puerto ${PORT}`));
