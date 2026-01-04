@@ -1,7 +1,8 @@
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const fs = require('fs');
+require("dotenv").config();
+const express = require("express");
+const axios = require("axios");
+const fs = require("fs");
+const OpenAI = require("openai");
 
 const app = express();
 app.use(express.json());
@@ -10,38 +11,34 @@ const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_ID = process.env.PHONE_NUMBER_ID;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// MEMORIA SIMPLE
-const memory = {};
-
-// CONTACTOS CLAVE
+// CONTACTOS
 const ARMADOR = "5520606276";
 const ACTUALIZADOR = "5645594185";
 
-// CARGAR CATÁLOGO
-function cargarCatalogo() {
-  return JSON.parse(fs.readFileSync('./catalogo.json'));
-}
+// MEMORIA RAM
+const memory = {};
 
-// MENSAJES WHATSAPP
+// ARCHIVOS
+const CATALOGO = "./data/catalogo.json";
+const HISTORIAL = "./data/historial.json";
+const CLIENTES = "./data/clientes.json";
+const COMBOS = "./data/combos.json";
+
+// UTILIDADES
+const readJSON = f => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f)) : {});
+const writeJSON = (f, d) => fs.writeFileSync(f, JSON.stringify(d, null, 2));
+
+// WHATSAPP
 async function sendMessage(to, body) {
   await axios.post(
     `https://graph.facebook.com/v22.0/${PHONE_ID}/messages`,
-    {
-      messaging_product: "whatsapp",
-      to,
-      text: { body }
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        "Content-Type": "application/json"
-      }
-    }
+    { messaging_product: "whatsapp", to, text: { body } },
+    { headers: { Authorization: `Bearer ${TOKEN}` } }
   );
 }
 
-// BOTONES
 async function sendButtons(to, text, buttons) {
   await axios.post(
     `https://graph.facebook.com/v22.0/${PHONE_ID}/messages`,
@@ -64,63 +61,93 @@ async function sendButtons(to, text, buttons) {
   );
 }
 
-// LISTA DE PRECIOS
-function generarCatalogoTexto() {
-  const cat = cargarCatalogo();
-  let txt = "📋 LISTA DE PRECIOS DEL DÍA\n\n";
-
-  for (const catg in cat) {
-    txt += `*${catg.toUpperCase()}*\n`;
-    cat[catg].forEach(p => {
-      if (p.disponible) {
-        txt += `• ${p.nombre} — $${p.precio}/${p.unidad}\n`;
-      }
+// CATALOGO TEXTO
+function catalogoTexto() {
+  const c = readJSON(CATALOGO);
+  let t = "📋 LISTA DE PRECIOS DEL DÍA\n\n";
+  for (const cat in c) {
+    t += `*${cat.toUpperCase()}*\n`;
+    c[cat].forEach(p => {
+      if (p.disponible) t += `• ${p.nombre} — $${p.precio}/${p.unidad}\n`;
     });
-    txt += "\n";
+    t += "\n";
   }
-
-  txt += "⚠️ Inventario sujeto a disponibilidad\n";
-  txt += "⏰ Horario: 8:00 AM a 6:30 PM";
-  return txt;
+  t += "⚠️ Inventario sujeto a disponibilidad\n⏰ 8:00 AM a 6:30 PM";
+  return t;
 }
 
-// WEBHOOK VERIFICACIÓN
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
+// IA COTIZACIÓN
+function cotizarIA(texto) {
+  const cat = readJSON(CATALOGO);
+  let detalle = [];
+  let total = 0;
 
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
+  for (const c in cat) {
+    cat[c].forEach(p => {
+      if (!p.disponible) return;
+      const key = p.nombre.toLowerCase().split(" ")[0];
+      if (texto.includes(key)) {
+        const n = texto.match(/(\d+(\.\d+)?)/);
+        const qty = n ? parseFloat(n[1]) : 1;
+        const sub = qty * p.precio;
+        total += sub;
+        detalle.push(`• ${p.nombre} ${qty} ${p.unidad} → $${sub}`);
+      }
+    });
   }
+  return detalle.length ? { detalle, total } : null;
+}
+
+// IA COMBOS
+function sugerirCombos(texto, cliente) {
+  const combos = readJSON(COMBOS);
+  const clientes = readJSON(CLIENTES);
+  let s = new Set();
+
+  for (const p in combos)
+    if (texto.includes(p)) combos[p].forEach(x => s.add(x));
+
+  if (clientes[cliente]?.favoritos)
+    Object.keys(clientes[cliente].favoritos).slice(0, 2).forEach(x => s.add(x));
+
+  return [...s].slice(0, 4);
+}
+
+// WEBHOOK VERIFY
+app.get("/webhook", (req, res) => {
+  if (
+    req.query["hub.mode"] === "subscribe" &&
+    req.query["hub.verify_token"] === VERIFY_TOKEN
+  ) return res.send(req.query["hub.challenge"]);
   res.sendStatus(403);
 });
 
 // WEBHOOK MENSAJES
-app.post('/webhook', async (req, res) => {
+app.post("/webhook", async (req, res) => {
   const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!msg) return res.sendStatus(200);
-
   const from = msg.from;
-  const text = msg.text?.body?.toLowerCase();
 
   // BOTONES
   if (msg.type === "interactive") {
     const id = msg.interactive.button_reply.id;
 
     if (id === "ver_catalogo") {
-      await sendMessage(from, generarCatalogoTexto());
-      await sendButtons(from, "¿Qué deseas hacer ahora? 😄", [
+      await sendMessage(from, catalogoTexto());
+      await sendButtons(from, "¿Qué deseas hacer? 😄", [
         { id: "ordenar", title: "🛒 Ordenar ahora" }
       ]);
     }
 
     if (id === "ordenar") {
-      memory[from] = { pedido: [] };
-      await sendMessage(
-        from,
-        "🛒😋 Escribe tu pedido así:\nEj: tomate 2kg, cebolla 1kg"
-      );
+      memory[from] = {};
+      await sendMessage(from, "🛒😋 Escríbenos tu pedido libremente");
+    }
+
+    if (id.startsWith("add_")) {
+      const prod = id.replace("add_", "");
+      memory[from].extra = prod;
+      await sendMessage(from, `✅ Agregado: ${prod}`);
     }
 
     return res.sendStatus(200);
@@ -130,7 +157,7 @@ app.post('/webhook', async (req, res) => {
   if (!memory[from]) {
     await sendMessage(
       from,
-      "👋😄 ¡Holaaaa!\nAquí vendemos frutas bien frescas 🍓🥑"
+      "👋😄 ¡Holaaa! Bienvenido a tu frutería de confianza 🍓🥬"
     );
     await sendButtons(from, "¿Qué te gustaría hacer?", [
       { id: "ver_catalogo", title: "📋 Ver catálogo" },
@@ -139,20 +166,52 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // GUARDAR PEDIDO
-  memory[from].pedido.push(text);
+  // TEXTO → IA
+  const texto = msg.text?.body?.toLowerCase();
+  const cot = cotizarIA(texto);
 
-  await sendButtons(from, "¿Confirmamos tu pedido? ✅", [
-    { id: "confirmar", title: "✅ Confirmar pedido" }
-  ]);
-
-  // CONFIRMAR
-  if (text?.includes("confirmar")) {
-    await sendMessage(from, "💰 Forma de pago:\n• Efectivo\n• Transferencia");
+  if (cot) {
+    memory[from].cot = cot;
 
     await sendMessage(
+      from,
+`🧠🧾 Cotización automática
+
+${cot.detalle.join("\n")}
+
+💰 Total: $${cot.total}`
+    );
+
+    const sug = sugerirCombos(texto, from);
+    if (sug.length)
+      await sendButtons(
+        from,
+        "💡 ¿Te agrego algo más?",
+        sug.map(s => ({ id: `add_${s}`, title: `➕ ${s}` }))
+      );
+  }
+
+  // CONFIRMACIÓN
+  if (texto?.includes("confirmar")) {
+    const hist = readJSON(HISTORIAL);
+    const cli = readJSON(CLIENTES);
+
+    hist[from] = hist[from] || [];
+    hist[from].push({ fecha: new Date(), pedido: memory[from].cot });
+    writeJSON(HISTORIAL, hist);
+
+    cli[from] = cli[from] || { pedidos: 0, favoritos: {} };
+    cli[from].pedidos++;
+    memory[from].cot.detalle.forEach(i => {
+      const n = i.split(" ")[1];
+      cli[from].favoritos[n] = (cli[from].favoritos[n] || 0) + 1;
+    });
+    writeJSON(CLIENTES, cli);
+
+    await sendMessage(from, "✅ Pedido confirmado 🎉");
+    await sendMessage(
       ARMADOR,
-      `🧺 NUEVO PEDIDO\nCliente: ${from}\nPedido:\n${memory[from].pedido.join("\n")}`
+      `🧺 NUEVO PEDIDO\nCliente: ${from}\n${memory[from].cot.detalle.join("\n")}\n💰 $${memory[from].cot.total}`
     );
 
     delete memory[from];
@@ -161,7 +220,6 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-// SERVER
-app.listen(PORT, () => {
-  console.log("🤖 Bot WhatsApp activo en puerto", PORT);
-});
+app.listen(PORT, () =>
+  console.log("🤖 Bot WhatsApp IA activo en puerto", PORT)
+);
