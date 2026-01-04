@@ -1,7 +1,7 @@
 {
-  "name": "whatsapp-webhook",
+  "name": "whatsapp-bot",
   "version": "1.0.0",
-  "description": "Webhook de WhatsApp Business listo para GitHub y Railway/Heroku",
+  "description": "Bot WhatsApp con catálogo, cotización y botones",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
